@@ -205,21 +205,28 @@ superwarp is no longer able to warp to locations you have not unlocked yet. Squa
 ### Multi-boxing features
 Every command can be sent to all characters by prepending the "all" or "party" keyword before the zone name and sub-zone destination or the sub-command. This will send the same command to all characters on the same machine or all characters on the same machine in the same party and delay their responses to prevent Square-Enix's servers from rejecting duplicate packets.
 
-#### Testing: party-by-default warp scope (personal development branch)
-Warp and smart-warp actions **default to the current character's in-game party**, restricted to local Windower clients running Superwarp. A solo party, or a party with no other local Superwarp clients, warps just the initiating character without IPC confirmation. The default is saved per character in `data/settings_<Character>.xml` as `<default_warp_scope>party</default_warp_scope>`.
+#### Testing: one-command Superwarp with party-by-default scope (personal development branch)
+Use **`//sw` for every supported warp system**. Superwarp already discovers the nearby compatible Home Point, waypoint, Survival Guide, portal, or other supported object and sends the request to that system. You do not normally need to type `hp`, `wp`, `sg`, `so`, etc.
 
-- `//sw scope` — show this character's saved default.
-- `//sw scope solo`, `//sw scope party`, `//sw scope all` — save the default for future commands. Abbreviations `s`, `p`, `a` are also accepted.
-- `//sw hp norg` — warp local party members to Norg (default scope).
-- `//sw s hp norg` — just the issuing character; `//sw a hp norg` — all local clients.
-- `//sw p`, `//sw s`, `//sw a` — contextual smart warp for the selected scope.
-- `//sw hp s norg`, `//sw hp p norg`, `//sw hp a norg` — also accept overrides after the system name when a destination follows.
-- Legacy `//sw hp all norg`, `//sw hp party norg`, `//sw all norg`, `//sw party norg`, and direct `//hp`-style commands remain supported.
-- `//sw hp set` and `//sw hp missing` stay local by default; `//sw hp p set` or `//sw hp a set` explicitly broadcast the action.
-- `//sw so s` and `//sw so a` still specify Sortie destinations. Single-letter scope overrides immediately after `//sw` now take priority (so use `//sw so a` for Sortie Device A rather than the formerly ambiguous `//sw a`).
-- For any destination or subcommand that itself is a single letter, use `//sw s so a` (solo to Sortie A) or the full scope keyword after the warp system: `//sw so solo a`.
+All **travel** commands default to local Windower clients belonging to the issuing character's in-game party. An in-game party consisting only of the issuing character acts locally, with no multiwarp popup. The saved per-character setting is `<default_warp_scope>party</default_warp_scope>` in `data/settings_<Character>.xml`.
 
-This setting does not summon missing members, contact nonlocal FFXI clients, or override their in-game unlocks. The existing staggered IPC broadcast/confirmation path is preserved for groups of two or more local clients.
+| Command | Effect |
+| --- | --- |
+| `//sw` | Smart action at the nearest recognized teleport object, for your party |
+| `//sw norg` | Warp your party to Norg using a nearby Home Point |
+| `//sw s norg` | Same destination, issuing character only |
+| `//sw p norg` | Explicitly use party scope |
+| `//sw a norg` | All local Windower clients |
+| `//sw s`, `//sw p`, `//sw a` | Contextual smart action for solo, party, or all |
+| `//sw scope` | Report saved default scope |
+| `//sw scope solo`, `//sw scope party`, `//sw scope all` | Save the default for subsequent travel commands |
+
+`s`, `p`, and `a` may also be written as `solo`, `party`, and `all`, respectively. The existing system-specific syntax, including `//sw hp ...`, `//sw wp ...`, `//sw sg ...`, `//sw so ...`, direct `//hp ...`, and older `all`/`party` prefixes, remains available for compatibility and ambiguity recovery. This new scope feature **does not change** how Superwarp identifies nearby devices or processes warp packets.
+
+**Collision note:** Some in-zone destinations already use the letters `s` or `a` (notably Sortie). A single `s` or `a` immediately after `//sw` now specifies a scope, not a destination. To warp to a Sortie device named `a`, use the unambiguous legacy spelling `//sw so a`, or use `//sw s so a` for a solo action. This tradeoff is temporary until any destination ambiguity is resolved by a tested, explicit destination grammar.
+
+Travel commands use the party scope implicitly; querying missing destinations and `//sw hp set` remain local unless explicitly scoped. `//sw hp a set` can still intentionally set the nearby return Home Point for all local clients. The existing staggered IPC confirmation path runs for two or more local party clients. Characters on another machine, or lacking the corresponding destination unlock, are not made available by the scope setting.
+
 
 The default behavior of superwarp is to cancel the in-game follow and autorun during a warp/sub-command event. But to disable this (for some reason), there is an option in the settings.xml file.
 
@@ -384,8 +391,9 @@ Thanks to Staticvoid for researching and implementing the Sortie, Odyssey, Temen
 - **Improvement**:  Added to Abyssea map; enter / exit for Abyssea - Empyreal Paradox  via Transcendental Radiance in Qufim / Cavernous Maw from inside. smartcommand autohandles each (//sw) - following the reduction of phantom gem from 30 to 10.
 
 
-#### Personal development — 2026-11-05 (party-default scope; test branch)
-- **Behavior**: New persistent `//sw scope [solo|party|all]` setting, defaulting to local in-game party for travel.
-- **Controls**: `s/p/a` immediately after `//sw`; direct warp-system scope keywords and backward-compatible `all/party` forms.
-- **Safety**: Broadcast recipients are not rebroadcast; solo parties act locally; `hp set` and `missing` stay local unless explicitly scoped; Sortie single-letter destinations remain usable with `//sw so s/a`.
-- **Testing**: Static/source review only; no live FFXI tests yet. The existing `master` branch remains unchanged pending testing.
+#### Personal development — 2026-11-05 (unified //sw syntax and party scope; test branch)
+- **Interface**: `//sw [s|p|a] [destination]` is the recommended command for all supported teleport systems; Superwarp's existing proximity-based system detection remains unchanged.
+- **Behavior**: New persistent `//sw scope [solo|party|all]`, defaulting to local in-game party for travel.
+- **Compatibility**: Existing explicit system commands are preserved for edge cases and older macros.
+- **Safety**: Broadcast recipients do not rebroadcast; solo parties act locally; `hp set` and `missing` stay local by default.
+- **Testing**: Source/static checks only; no Windower or live FFXI tests yet. Master remains unchanged.

@@ -108,6 +108,7 @@ local defaults = {
     simulate_client_lock = false,           -- lock the local client during a warp/subcommand, simulating menu behavior.
     send_all_order_mode = 'melast',         -- order modes: melast, mefirst, alphabetical
     send_all_display = true,
+    default_warp_scope = 'party',            -- Implicit travel scope: solo, party (local party clients), or all local clients.
     chat_log_use = 'log',                   -- log messages to 'log', 'console', or 'none'. If debug is on, it will always log to the chat log
     understood = false,
     hp_legacy_defaults = true,
@@ -338,6 +339,18 @@ function order_participants(participants)
         participants = T{player}:extend(participants)
     end
     return participants
+end
+
+-- Scope prefixes are accepted after //sw or after an individual warp-system command.
+-- Keep the shorthand here so direct and smart routes interpret them identically.
+local function normalize_warp_scope(value)
+    if type(value) ~= 'string' then return nil end
+    local aliases = {
+        s = 'solo', solo = 'solo',
+        p = 'party', party = 'party', ['@party'] = 'party',
+        a = 'all', all = 'all', ['@all'] = 'all',
+    }
+    return aliases[value:lower()]
 end
 
 local function get_party_members(local_members)
@@ -837,7 +850,7 @@ local function handle_map_short_name(map, name)
     return false
 end
 
-local function handle_warp(warp, args, fast_retry, retries_remaining, current_sub_cmd)
+local function handle_warp(warp, args, fast_retry, retries_remaining, current_sub_cmd, from_broadcast)
     warp = warp:lower()
     if retries_remaining == nil then
         state.loop_count = settings.max_retries
@@ -856,32 +869,53 @@ local function handle_warp(warp, args, fast_retry, retries_remaining, current_su
         args:remove(1) 
         if args:length() == 0 then args:append('') end
     end
-    local all = S{'all','a','@all'}:contains(args[1]:lower()) and (args[2] or smartcmd)
-    local party = S{'party','p','@party'}:contains(args[1]:lower()) and (args[2] or smartcmd)
-    if all or party then 
-        args:remove(1) 
+    local explicit_scope = normalize_warp_scope(args[1])
+    if explicit_scope then
+        args:remove(1)
+    end
 
-        local participants = nil
-        if all then
+    -- Query commands and changes to the in-game return Home Point remain local
+    -- by default. Explicit party/all requests still work for these actions.
+    local first_arg = args[1] and args[1]:lower()
+    local local_only_action = first_arg == 'missing'
+        or ((warp == 'hp' or warp == 'ho') and first_arg == 'set')
+    local scope = 'solo'
+    if not from_broadcast then
+        scope = explicit_scope or (local_only_action and 'solo')
+            or normalize_warp_scope(settings.default_warp_scope) or 'party'
+    end
+
+    -- IPC recipients, including the initiating character, must never
+    -- re-dispatch an implicitly scoped request.
+    if scope ~= 'solo' then
+        local participants
+        if scope == 'all' then
             participants = get_participants()
-        elseif party then
+        else
             participants = get_party_members(get_participants())
         end
+        local me = windower.ffxi.get_player().name
+        if not participants:contains(me) then
+            participants:append(me)
+        end
         participants = order_participants(participants)
-        debug('sending warp to all: '..participants:concat(', '))
-        confirm_msg = 'All warps confirmed.'
-        send_all_with_confirm(
-            warp..' '..args:concat(' '),
-            settings.send_all_delay,
-            participants,
-            function(warp_id, entry)
-                log(confirm_msg)
-            end,
-            settings.send_all_display
-        )
-        --send_all(warp..' '..args:concat(' '), settings.send_all_delay, participants)
 
-        return
+        -- A solo party (or a party with no other local clients) travels
+        -- immediately; no IPC scan/confirmation popup is needed.
+        if #participants > 1 then
+            debug('sending warp to '..scope..': '..participants:concat(', '))
+            confirm_msg = 'All warps confirmed.'
+            send_all_with_confirm(
+                warp..' '..args:concat(' '),
+                settings.send_all_delay,
+                participants,
+                function(warp_id, entry)
+                    log(confirm_msg)
+                end,
+                settings.send_all_display
+            )
+            return
+        end
     end
     warp_ident = ((warp_ident and warp_ident) or 0) + 1
     smartcmd = false
@@ -947,7 +981,7 @@ local function handle_warp(warp, args, fast_retry, retries_remaining, current_su
     debug('No map found matching short name: '..tostring(warp))
 end
 
-local function received_warp_command(cmd, args)
+local function received_warp_command(cmd, args, from_broadcast)
     local player = windower.ffxi.get_mob_by_target('me')
     prev_location = {x = player.x, y = player.y, z = player.z}
     if not timing.warp_cmd_time then
@@ -962,7 +996,7 @@ local function received_warp_command(cmd, args)
         if not smartcmd then
             state.debug_stack = T{}
         end
-        handle_warp(cmd, args)
+        handle_warp(cmd, args, nil, nil, nil, from_broadcast)
     end
 end
 ---------------------------------------------
@@ -1162,7 +1196,7 @@ end
 ---------------------------------------------
 --            [The superwarp™]             --
 ---------------------------------------------
-local function the_superwarp(genArgs, dispatcher, retries)
+local function the_superwarp(genArgs, requested_scope, retries)
 
     if retries == nil then
         state.loop_count = settings.max_retries
@@ -1173,7 +1207,7 @@ local function the_superwarp(genArgs, dispatcher, retries)
         if state.loop_count > 0 then
             log('Searching for warp NPCs...')
             state.loop_count = state.loop_count - 1
-            the_superwarp:schedule(3, genArgs, dispatcher, state.loop_count)
+            the_superwarp:schedule(3, genArgs, requested_scope, state.loop_count)
         else
             log('No warp NPCs nearby.')
             timing.warp_cmd_time = nil
@@ -1207,7 +1241,7 @@ local function the_superwarp(genArgs, dispatcher, retries)
     else
         debug('Using '..result.npc.name..' for '..result.map_name..'.')
     end
-    if dispatcher then genArgs:insert(1, dispatcher) end
+    if requested_scope then genArgs:insert(1, requested_scope) end
     smartcmd = true
     warp_listener()
     received_warp_command(short_name, genArgs)
@@ -1220,6 +1254,14 @@ windower.register_event('addon command', function(...)
     args:remove(1)
     for i,v in pairs(args) do args[i]=windower.convert_auto_trans(args[i]) end
     local item = table.concat(args," "):lower()
+    -- //sw s hp norg and //sw p wp ... use the same direct route as
+    -- //sw hp s norg and //sw wp p ...
+    if normalize_warp_scope(cmd) and args[1] and warp_list:contains(args[1]:lower()) then
+        local prefix = cmd
+        cmd = args[1]
+        args:remove(1)
+        args:insert(1, prefix)
+    end
 
     if cmd and warp_list:contains(cmd:lower()) and args[1] then
         warp_listener()
@@ -1299,6 +1341,20 @@ windower.register_event('addon command', function(...)
             log('Sendall readout is now ON.')
         end
         config.save(settings)
+    elseif cmd == 'scope' then
+        if not args[1] or args[1]:lower() == 'status' then
+            log('Default warp scope: '..(normalize_warp_scope(settings.default_warp_scope) or 'party')..
+                '. Use //sw scope <solo|party|all>.')
+        else
+            local chosen_scope = normalize_warp_scope(args[1])
+            if chosen_scope then
+                settings.default_warp_scope = chosen_scope
+                config.save(settings)
+                log('Default warp scope set to '..chosen_scope..'.')
+            else
+                log('Invalid scope. Use //sw scope <solo|party|all>.')
+            end
+        end
     elseif cmd == 'help' then
         windower.add_to_chat(207,'\n| READ ME |\n[New!] You may now use "//sw" or "/console sw" for all maps with no extra command prefix. i.e. //sw port, or //sw rab to go to Rabao #2')
         windower.add_to_chat(207,'[New!] superwarp (smartcommand) - You may now use just //sw with no command for all warps that do not require a destination to be specified. i.e. enter and exit commands for abyssea, escha zones and apollyon, domain invasion enter, next command in limbus, port in odyssey and sortie, runic portal assault and return, campaign npcs return and Cavernous Maw port, all 4 Walk Of Echoes commands. It can also be used to go to the default destination in cases that call for specification. "//sw p" to use the smart command with all party members, or "a" for all. Use with confidence. Layers of failsafes are in place.')
@@ -1314,7 +1370,7 @@ windower.register_event('addon command', function(...)
             local map = maps[key]
             windower.add_to_chat(207,map.help_text)
         end
-        windower.add_to_chat(207,'| superwarp |\nsw cancel -- Cancels pending warp command.\nsw reset -- Attempts to clear menu lock.\nsw sync -- Instantly synchronizes all characters Limbus chest tracking order with the character the command is executed from.\nsw chest (tower) / chest -- Manually updates chest tracking with the tower you input after the chest command. i.e. //sw chest se; If no argument is provided will display the next chest open location within limbus. i.e. //sw chest\nsw hpdefaults -- Toggles homepoint default destinations between Legacy and New.\nsw display -- Toggles all / party warp display.\nsw missing -- Display destinations you are missing from the nearest warp system if applicable.\n-----------------------------')
+        windower.add_to_chat(207,'| superwarp |\nsw cancel -- Cancels pending warp command.\nsw reset -- Attempts to clear menu lock.\nsw sync -- Instantly synchronizes all characters Limbus chest tracking order with the character the command is executed from.\nsw chest (tower) / chest -- Manually updates chest tracking with the tower you input after the chest command. i.e. //sw chest se; If no argument is provided will display the next chest open location within limbus. i.e. //sw chest\nsw hpdefaults -- Toggles homepoint default destinations between Legacy and New.\nsw display -- Toggles all / party warp display.\nsw scope [solo|party|all] -- Shows or saves the default travel scope (party by default).\nsw [s|p|a] [destination] -- Overrides scope for one smart warp; also works before hp/wp/etc.\nsw hp [s|p|a] <zone> [number] -- Scope override after the warp system.\nsw missing -- Display destinations you are missing from the nearest warp system if applicable.\n-----------------------------')
         windower.add_to_chat(207,'Use [all/a/@all/party/p] after the command prefix and before the destination to warp all characters or all party/alliance members. (//li p next)\nYou may still use [warp] if you learned to include it or still have macros written this way. (sw hp warp eastern adoulin 1) (Legacy support)\n\n[New!] You may now use "//sw" or "/console sw" for all maps with no extra command prefix. i.e. //sw port , or //sw rab to go to Rabao #2')
         windower.add_to_chat(207,'[New!] superwarp (smartcommand) - You may now use just //sw with no command for all warps that do not require a destination to be specified. i.e. enter and exit commands for abyssea, escha zones and apollyon, domain invasion enter, next command in limbus, port in odyssey and sortie, runic portal assault and return, campaign npcs return and Cavernous Maw port, all 4 Walk Of Echoes commands. It can also be used to go to the default destination in cases that call for specification. "//sw p" to use the smart command with all party members, or "a" for all. Use with confidence. Layers of failsafes are in place.')
         windower.add_to_chat(207,'If you become menu locked use //sw reset to clear.')
@@ -1324,29 +1380,14 @@ windower.register_event('addon command', function(...)
     else
         timing.warp_cmd_time = os.clock()
         if smartcheck then
-            local all, party
-            if genArgs[1] and genArgs[1]:lower() == 'warp' or (genArgs[1] and genArgs[1]:lower() == 'w') then 
-                genArgs:remove(1) 
+            if genArgs[1] and (genArgs[1]:lower() == 'warp' or genArgs[1]:lower() == 'w') then
+                genArgs:remove(1)
             end
-            if genArgs:length() ~= 0 then
-                all = S{'all','a','@all'}:contains(genArgs[1]:lower())
-                party = S{'party','p','@party'}:contains(genArgs[1]:lower())
-                if all then
-                    local _zs = S{275, 133, 189}
-                    local zone_exclusion = windower.ffxi.get_info().zone
-                    if _zs:contains(zone_exclusion) and not genArgs[2] then
-                        all = nil
-                        genArgs[1] = '#a'
-                    else
-                        genArgs:remove(1)
-                    end
-                elseif party then 
-                    genArgs:remove(1)
-                end
+            local requested_scope = genArgs[1] and normalize_warp_scope(genArgs[1])
+            if requested_scope then
+                genArgs:remove(1)
             end
-            local dispatcher
-            if party then dispatcher = 'p' elseif all then dispatcher = 'a' end
-            the_superwarp(genArgs,dispatcher)
+            the_superwarp(genArgs, requested_scope)
         else
             log('Please update all of superwarp\'s files for version 1.1.')
             return
@@ -1371,7 +1412,7 @@ function receive_send_all(msg)
     if cmd == 'reset' then
         reset()
     elseif warp_list:contains(cmd) then
-        received_warp_command(cmd, args)
+        received_warp_command(cmd, args, true)
     end
 end
 

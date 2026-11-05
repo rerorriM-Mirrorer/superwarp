@@ -870,6 +870,13 @@ local function handle_warp(warp, args, fast_retry, retries_remaining, current_su
         if args:length() == 0 then args:append('') end
     end
     local explicit_scope = normalize_warp_scope(args[1])
+    -- Single-letter destination names are already used by some systems
+    -- (e.g. Sortie "a" and "s"). Interpret a one-letter scope after an
+    -- individual warp-system command only when another argument follows.
+    -- Prefixes immediately after //sw are normalized to full scope names.
+    if explicit_scope and #args[1] == 1 and (not args[2] or args[2] == '') then
+        explicit_scope = nil
+    end
     if explicit_scope then
         args:remove(1)
     end
@@ -1257,7 +1264,7 @@ windower.register_event('addon command', function(...)
     -- //sw s hp norg and //sw p wp ... use the same direct route as
     -- //sw hp s norg and //sw wp p ...
     if normalize_warp_scope(cmd) and args[1] and warp_list:contains(args[1]:lower()) then
-        local prefix = cmd
+        local prefix = normalize_warp_scope(cmd)
         cmd = args[1]
         args:remove(1)
         args:insert(1, prefix)

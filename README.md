@@ -205,6 +205,22 @@ superwarp is no longer able to warp to locations you have not unlocked yet. Squa
 ### Multi-boxing features
 Every command can be sent to all characters by prepending the "all" or "party" keyword before the zone name and sub-zone destination or the sub-command. This will send the same command to all characters on the same machine or all characters on the same machine in the same party and delay their responses to prevent Square-Enix's servers from rejecting duplicate packets.
 
+#### Testing: party-by-default warp scope (personal development branch)
+Warp and smart-warp actions **default to the current character's in-game party**, restricted to local Windower clients running Superwarp. A solo party, or a party with no other local Superwarp clients, warps just the initiating character without IPC confirmation. The default is saved per character in `data/settings_<Character>.xml` as `<default_warp_scope>party</default_warp_scope>`.
+
+- `//sw scope` — show this character's saved default.
+- `//sw scope solo`, `//sw scope party`, `//sw scope all` — save the default for future commands. Abbreviations `s`, `p`, `a` are also accepted.
+- `//sw hp norg` — warp local party members to Norg (default scope).
+- `//sw s hp norg` — just the issuing character; `//sw a hp norg` — all local clients.
+- `//sw p`, `//sw s`, `//sw a` — contextual smart warp for the selected scope.
+- `//sw hp s norg`, `//sw hp p norg`, `//sw hp a norg` — also accept overrides after the system name when a destination follows.
+- Legacy `//sw hp all norg`, `//sw hp party norg`, `//sw all norg`, `//sw party norg`, and direct `//hp`-style commands remain supported.
+- `//sw hp set` and `//sw hp missing` stay local by default; `//sw hp p set` or `//sw hp a set` explicitly broadcast the action.
+- `//sw so s` and `//sw so a` still specify Sortie destinations. Single-letter scope overrides immediately after `//sw` now take priority (so use `//sw so a` for Sortie Device A rather than the formerly ambiguous `//sw a`).
+- For any destination or subcommand that itself is a single letter, use `//sw s so a` (solo to Sortie A) or the full scope keyword after the warp system: `//sw so solo a`.
+
+This setting does not summon missing members, contact nonlocal FFXI clients, or override their in-game unlocks. The existing staggered IPC broadcast/confirmation path is preserved for groups of two or more local clients.
+
 The default behavior of superwarp is to cancel the in-game follow and autorun during a warp/sub-command event. But to disable this (for some reason), there is an option in the settings.xml file.
 
 An option is available to apply a windower command before a warp/sub-command begins as well as on arrival. The use case is really infinite, but the goal was to enable the user to disable follow addons during a warp or sub-command event. Bonus feature! Prank your friends by setting the command before starting a warp to `sw cancel`. (Don't actually, I'm the one that will get a message about it not working)
@@ -367,3 +383,9 @@ Thanks to Staticvoid for researching and implementing the Sortie, Odyssey, Temen
 - **Improvement**: Added to Escha map; enter / exit for Reisenjima Sanctorium via Etched Rock on either side. smartcommand autohandles each. (//sw)  - following the reduction of phantom gem from 30 to 10.
 - **Improvement**:  Added to Abyssea map; enter / exit for Abyssea - Empyreal Paradox  via Transcendental Radiance in Qufim / Cavernous Maw from inside. smartcommand autohandles each (//sw) - following the reduction of phantom gem from 30 to 10.
 
+
+#### Personal development — 2026-11-05 (party-default scope; test branch)
+- **Behavior**: New persistent `//sw scope [solo|party|all]` setting, defaulting to local in-game party for travel.
+- **Controls**: `s/p/a` immediately after `//sw`; direct warp-system scope keywords and backward-compatible `all/party` forms.
+- **Safety**: Broadcast recipients are not rebroadcast; solo parties act locally; `hp set` and `missing` stay local unless explicitly scoped; Sortie single-letter destinations remain usable with `//sw so s/a`.
+- **Testing**: Static/source review only; no live FFXI tests yet. The existing `master` branch remains unchanged pending testing.
